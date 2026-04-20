@@ -41,7 +41,7 @@ Douyin Video Skill
 - 内置标题一致性校验，避免点错视频还继续提取
 - 支持自定义搜索词和筛选参数
 - 提取后自动输出 transcript-raw / transcript-clean / transcript-fixes
-- 可单独发布，不依赖外部 douyin-video skill
+- 可单独发布，内置视频提取与文案修正能力
 
 ## Suggested tags
 - douyin
@@ -56,6 +56,6 @@ Douyin Video Skill
 ## Release notes snippet
 v1.0.0
 - 内置抖音视频下载与文案提取能力
-- 支持搜索结果筛选参数
-- 新增标题一致性校验
+- 支持搜索结果筛选参数与自定义搜索词
+- 新增标题一致性校验（当前弹层标题 == 目标搜索结果标题）
 - 新增文案修正与落盘流程

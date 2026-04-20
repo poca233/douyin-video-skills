@@ -1,13 +1,13 @@
 ---
 name: douyin-video-skill
-description: "抖音视频搜索、筛选、选定、链接获取、文案提取与文案修正工作流。用于： (1) 在抖音网页中登录后搜索自定义关键词，(2) 按筛选参数从搜索结果中选择合适视频，(3) 优先从页面 modal_id 或视频页 URL 构造稳定视频链接，必要时再尝试分享按钮复制链接，(4) 使用本 skill 内置脚本下载视频并提取语音文案，(5) 对 ASR 结果进行基于标题、标签、上下文和领域常识的合理修正，并输出原始稿、修正版、修正说明。适用于抖音二次创作前的素材采集、竞品研究、视频文案提取与清洗场景；可独立发布，不依赖外部 douyin-video skill。"
+description: "抖音视频搜索、筛选、选定、链接获取、文案提取与文案修正工作流。用于： (1) 在抖音网页中登录后搜索自定义关键词，(2) 按筛选参数从搜索结果中选择合适视频，(3) 优先从页面 modal_id 或视频页 URL 构造稳定视频链接，必要时再尝试分享按钮复制链接，(4) 使用本 skill 内置脚本下载视频并提取语音文案，(5) 对 ASR 结果进行基于标题、标签、上下文和领域常识的合理修正，并输出原始稿、修正版、修正说明。适用于抖音二次创作前的素材采集、竞品研究、视频文案提取与清洗场景；可独立发布。"
 ---
 
 # 抖音视频搜索 → 提取 → 修正 工作流
 
 这个 skill 是给 `workspace-douyin-analyst` 用的**完整工作流 skill**。
 
-它吸收了现有 `skills/douyin-video` 的后半段能力（下载视频、提取文案），并补上前半段：
+它覆盖从搜索到提取再到修正的完整链路：
 - 打开抖音
 - 复用登录态
 - 搜索自定义关键词
@@ -70,13 +70,13 @@ skills/douyin-video-skill/
 
 ## 内置能力与依赖
 
-这个 skill 已经**吸收并内置**了原 `douyin-video` 里对新 skill 有用的内容：
+这个 skill 内置：
 - 分享链接解析
 - 无水印视频下载
 - 音频提取
 - ASR 文案提取
-
-因此，**单独发布时不再依赖外部 `douyin-video` skill**。
+- 文案清洗与修正
+- 标题一致性校验
 
 仍建议配合：
 - `skills/playwright-cli`：浏览器打开、登录态复用、搜索、点击结果、读取页面参数
@@ -258,20 +258,14 @@ python3 skills/douyin-video-skill/scripts/transcript_cleanup.py \
 
 ## 环境要求
 
-### 1. `douyin-video` 已安装
-路径：
-```text
-/Users/liyunzeng/.openclaw/workspace-douyin-analyst/skills/douyin-video
-```
-
-### 2. `playwright-cli` 可用
+### 1. `playwright-cli` 可用
 验证：
 ```bash
 playwright-cli --version
 ```
 
-### 3. API Key
-当前 `douyin-video` 实际读取的是：
+### 2. API Key
+当前脚本实际读取的是：
 ```bash
 API_KEY
 ```
@@ -280,7 +274,7 @@ API_KEY
 ~/.openclaw/.env
 ```
 
-### 4. FFmpeg
+### 3. FFmpeg
 ```bash
 brew install ffmpeg
 ```
@@ -302,7 +296,7 @@ output/<videoId>/
 其中：
 - `meta.json`：标题、关键词、视频ID、筛选参数、提取时间
 - `source-link.txt`：最终用于提取的链接
-- `transcript.md`：原始 skill 产物
+- `transcript.md`：提取器原始产物
 - `transcript-raw.md`：保留原始转写
 - `transcript-clean.md`：修正版文案
 - `transcript-fixes.md`：修正记录与待确认项
