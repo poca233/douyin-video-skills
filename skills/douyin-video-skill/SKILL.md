@@ -1,87 +1,69 @@
 ---
 name: douyin-video-skill
-description: "抖音视频搜索、筛选、选定、链接获取、文案提取与文案修正工作流。用于： (1) 在抖音网页中登录后搜索自定义关键词，(2) 按筛选参数从搜索结果中选择合适视频，(3) 优先从页面 modal_id 或视频页 URL 构造稳定视频链接，必要时再尝试分享按钮复制链接，(4) 使用本 skill 内置脚本下载视频并提取语音文案，(5) 对 ASR 结果进行基于标题、标签、上下文和领域常识的合理修正，并输出原始稿、修正版、修正说明。适用于抖音二次创作前的素材采集、竞品研究、视频文案提取与清洗场景；可独立发布。"
+description: "抖音视频搜索、筛选、链接获取、文案提取与修正工具。支持在抖音网页中登录后搜索自定义关键词，按筛选参数从搜索结果中选择合适视频，校验当前弹层标题与目标搜索结果标题一致后，再提取视频语音文案并输出原始稿、修正版、修正说明。适用场景包括抖音二次创作前的素材采集、竞品研究、视频文案提取与清洗。"
 ---
 
-# 抖音视频搜索 → 提取 → 修正 工作流
+# 抖音视频搜索、文案提取与修正
 
-这个 skill 是给 `workspace-douyin-analyst` 用的**完整工作流 skill**。
+从抖音网页中搜索自定义关键词，筛选并选定目标视频，校验当前视频是否正确，再提取视频语音文案，并对抽取结果进行修正和落盘。
 
-它覆盖从搜索到提取再到修正的完整链路：
-- 打开抖音
-- 复用登录态
-- 搜索自定义关键词
-- 按规则筛选结果
-- 锁定目标视频
-- 获取稳定视频链接
-- 提取文案
-- 修正文案
-- 强制落盘
+## 功能概述
 
-## 核心原则
+- **搜索视频**: 在抖音网页中使用自定义关键词搜索相关视频
+- **筛选结果**: 按标题关键词、账号类型、点赞、时长、内容类型等参数筛选候选视频
+- **锁定目标视频**: 点开候选视频后，校验“当前弹层标题 == 目标搜索结果标题”
+- **获取稳定链接**: 优先使用页面 `modal_id` 组装稳定视频链接，必要时再尝试分享按钮
+- **提取文案**: 下载视频、提取音频、调用 ASR 获取语音文案
+- **修正文案**: 结合标题、标签、上下文和领域常识修正 ASR 错误
+- **自动保存**: 输出原始稿、修正版、修正说明、meta 信息等文件
 
-### 1. 不把“复制链接”当成唯一依赖
-PC 端抖音页面的分享浮层不稳定，按钮可能：
-- 只有悬停才出现
-- 在播放器浮层里不易点中
-- DOM 结构经常变化
+## 环境要求
 
-**优先顺序：**
-1. 直接读取当前页面 URL 中的 `modal_id`
-2. 组装为 `https://www.iesdouyin.com/share/video/<videoId>`
-3. 若页面结构稳定，再尝试分享按钮/复制链接
+### 依赖安装
 
-### 2. 先校验“当前视频”再提取
-搜索结果页点开视频后，抖音弹层里的当前视频有时会切到别的结果。
-
-**必须增加校验：**
-- 搜索结果卡片标题
-- 当前弹层视频标题 / 当前 `modal_id`
-- 若二者不一致，不要继续提取；先重新锁定目标
-
-### 3. 文案提取后必须修正
-ASR 常见问题：
-- 同音错字
-- 连词错误
-- 重复词
-- 断句错误
-- 领域术语误识别
-
-修正时必须结合：
-- 视频标题
-- 话题标签
-- 前后句上下文
-- 领域常识（如无人机、赛事、培训、器材术语）
-
-## 推荐目录结构
-
-```text
-skills/douyin-video-skill/
-├── SKILL.md
-├── scripts/
-│   ├── douyin_downloader.py
-│   ├── run_pipeline.py
-│   ├── title_match_check.py
-│   └── transcript_cleanup.py
-└── references/
-    ├── filter-rules.md
-    └── publish-copy.md
+```bash
+pip install requests ffmpeg-python
 ```
 
-## 内置能力与依赖
+### 系统要求
 
-这个 skill 内置：
-- 分享链接解析
-- 无水印视频下载
-- 音频提取
-- ASR 文案提取
-- 文案清洗与修正
-- 标题一致性校验
+- FFmpeg 必须安装在系统中（用于音视频处理）
+- macOS: `brew install ffmpeg`
+- Ubuntu: `apt install ffmpeg`
 
-仍建议配合：
-- `skills/playwright-cli`：浏览器打开、登录态复用、搜索、点击结果、读取页面参数
+### 浏览器自动化要求
 
-## 一键执行入口
+需要可用的 `playwright-cli`：
+
+```bash
+playwright-cli --version
+```
+
+推荐使用持久化登录态：
+
+```bash
+playwright-cli -s=douyinflow open https://www.douyin.com/ --headed --persistent
+```
+
+### API 密钥配置（仅文案提取需要）
+
+文案提取功能使用硅基流动 API，需要设置环境变量：
+
+```bash
+export API_KEY="your-siliconflow-api-key"
+```
+
+对 OpenClaw / Gateway 环境，建议写入：
+
+```bash
+~/.openclaw/.env
+```
+
+获取 API 密钥: https://cloud.siliconflow.cn/
+
+## 使用方法
+
+### 方法一：使用总控脚本（推荐）
 
 ```bash
 python3 skills/douyin-video-skill/scripts/run_pipeline.py \
@@ -96,64 +78,39 @@ python3 skills/douyin-video-skill/scripts/run_pipeline.py \
   --persistent
 ```
 
-这个总控脚本会串起来：
-- 打开抖音并复用登录态
-- 搜索关键词
-- 解析候选项并按参数筛选
-- 点开目标视频
-- 校验“当前弹层标题 == 目标搜索结果标题”
-- 提取文案
-- 修正文案
-- 落盘 meta / source-link / transcript 系列文件
+### 总控脚本支持的主要参数
 
-若你要发布到平台，可参考：
-- `references/publish-copy.md`
+```bash
+--keyword              自定义搜索词（必填）
+--pick-index           选择第几个符合条件的结果（默认 1）
+--must-include         标题必须包含的词，可多次传入
+--exclude-word         需要排除的词，可多次传入
+--content-type-hint    内容类型提示，如 培训 / 科普 / 推荐，可多次传入
+--account-hint         账号类型提示，如 教育 / 俱乐部 / 教练，可多次传入
+--min-likes            最低点赞量
+--duration-min-sec     最短时长（秒）
+--duration-max-sec     最长时长（秒）
+--headed               浏览器前台运行
+--persistent           使用持久化登录态
+--output-dir           输出目录（默认 output）
+```
 
-## 推荐执行步骤
+### 方法二：分步执行
 
-### A. 打开并复用登录态
-使用 `playwright-cli`：
+#### 1. 打开抖音并复用登录态
 
 ```bash
 playwright-cli -s=douyinflow open https://www.douyin.com/ --headed --persistent
 ```
 
-若未登录，允许用户手动完成登录。
-
-### B. 搜索自定义关键词
-例：
+#### 2. 搜索自定义关键词
 
 ```bash
 playwright-cli -s=douyinflow fill <search-box-ref> "青少年无人机"
 playwright-cli -s=douyinflow click <search-button-ref>
 ```
 
-### C. 根据筛选参数选视频
-先读取 `references/filter-rules.md`。
-
-至少考虑：
-- `keyword`: 搜索词（自定义）
-- `pickIndex`: 选第几个符合条件的结果（默认 1）
-- `mustInclude`: 标题必须包含的词
-- `excludeWords`: 标题/账号中要排除的词
-- `minLikes`: 最低点赞量（可选）
-- `preferRecentDays`: 优先最近多少天（可选）
-- `durationMinSec`: 最短时长（可选）
-- `durationMaxSec`: 最长时长（可选）
-- `contentTypeHints`: 如 培训 / 科普 / 赛事 / 推荐 / 选购
-- `accountHints`: 优先官方机构 / 教练 / 教育号 / 个人分享
-
-### D. 进入视频后先做“标题一致性校验”
-先记录：
-- 目标搜索结果标题 `targetTitle`
-- 当前页面 `modal_id`
-- 当前弹层标题 `modalTitle`
-
-**硬性校验规则：**
-> 当前弹层标题 == 目标搜索结果标题
-> 否则不能继续提取
-
-执行：
+#### 3. 选定视频后做标题一致性校验
 
 ```bash
 python3 skills/douyin-video-skill/scripts/title_match_check.py \
@@ -161,34 +118,19 @@ python3 skills/douyin-video-skill/scripts/title_match_check.py \
   --actual "当前弹层标题"
 ```
 
-若脚本退出码非 0，必须停止提取并重新锁定目标视频。
+> **必须满足：当前弹层标题 == 目标搜索结果标题**  
+> 否则不能继续提取。
 
-### E. 通过校验后锁定 videoId
-优先读取：
-
-```js
-new URL(location.href).searchParams.get('modal_id')
-```
-
-再组装：
-
-```text
-https://www.iesdouyin.com/share/video/<videoId>
-```
-
-### F. 调用本 skill 内置提取器提取文案
+#### 4. 提取视频文案
 
 ```bash
-API_KEY="..." python3 skills/douyin-video-skill/scripts/douyin_downloader.py \
+python3 skills/douyin-video-skill/scripts/douyin_downloader.py \
   --link "https://www.iesdouyin.com/share/video/<videoId>" \
   --action extract \
   --output ./output
 ```
 
-### G. 落盘原始稿 / 修正版 / 修正说明
-原始提取结果默认只有 `transcript.md`。
-
-拿到原始文案后，必须再调用：
+#### 5. 修正文案并生成附加文件
 
 ```bash
 python3 skills/douyin-video-skill/scripts/transcript_cleanup.py \
@@ -197,114 +139,129 @@ python3 skills/douyin-video-skill/scripts/transcript_cleanup.py \
   --outdir ./output/<videoId>
 ```
 
-输出：
-- `transcript-raw.md`
-- `transcript-clean.md`
-- `transcript-fixes.md`
-
-## 参数约定
-
-建议把一次任务的参数整理成：
+### 筛选参数示例
 
 ```json
 {
   "keyword": "青少年无人机",
   "pickIndex": 1,
   "mustInclude": ["青少年", "无人机"],
-  "excludeWords": ["直播", "游戏直播", "纯广告"],
+  "excludeWords": ["直播", "纯广告", "录播回放"],
   "minLikes": 0,
-  "preferRecentDays": 365,
   "durationMinSec": 15,
   "durationMaxSec": 120,
-  "contentTypeHints": ["培训", "推荐", "科普"],
-  "accountHints": ["教练", "教育", "俱乐部", "培训"]
+  "contentTypeHints": ["培训", "科普", "推荐"],
+  "accountHints": ["教育", "俱乐部", "教练"]
 }
 ```
 
-## 这次实测暴露出的两个关键问题
+更详细的筛选思路参考：
 
-### 问题 1：点开搜索结果后，当前视频可能不是你以为的那条
-实测中，搜索结果点中了一条视频，但后续当前弹层的视频 `modal_id` 发生了变化，最终提取到的是另一条内容。
+- `references/filter-rules.md`
 
-**改进要求（已固化为必须执行）：**
-- 点开结果后，立即记录目标卡片标题
-- 再读取当前页面 `modal_id`
-- 再读取当前弹层标题
-- 执行标题校验：**当前弹层标题 == 目标搜索结果标题**
-- 若不一致，停止后续提取并重新锁定目标
+发布文案参考：
 
-### 问题 2：ASR 文案能提出来，但会有明显误识别
-实测文案中出现了：
-- 同音错字（如“靠挫力”应接近“抗挫力”）
-- 语序不自然
-- 重复词
-- 对白角色混乱
+- `references/publish-copy.md`
 
-**改进要求：**
-- 提取后必须进入“文案修正”步骤
-- 只修正高概率明显错误
-- 不确定的地方保留并标注“待确认”
+## 输出目录结构
 
-## 遇到过的实际问题
-
-1. 抖音搜索结果页经常触发滑块验证，需要用户手动过一次
-2. 分享按钮在 PC 页播放器浮层里不稳定，点击成本高
-3. App 分享短链更稳定；对部分网页直链不稳定
-4. `playwright-cli` 的 element ref 每次快照都会变，不能硬编码复用旧 ref
-5. Python 依赖需要提前安装：
-   - `requests`
-   - `ffmpeg-python`
-6. 当前弹层标题与目标搜索结果标题可能不一致，不能跳过校验直接提取
-
-## 环境要求
-
-### 1. `playwright-cli` 可用
-验证：
-```bash
-playwright-cli --version
-```
-
-### 2. API Key
-当前脚本实际读取的是：
-```bash
-API_KEY
-```
-建议放在：
-```bash
-~/.openclaw/.env
-```
-
-### 3. FFmpeg
-```bash
-brew install ffmpeg
-```
-
-## 输出要求
-
-每次完整执行后，最终目录建议为：
+完整执行后，每个视频建议保存到独立文件夹：
 
 ```text
-output/<videoId>/
-├── meta.json
-├── source-link.txt
-├── transcript.md
-├── transcript-raw.md
-├── transcript-clean.md
-└── transcript-fixes.md
+output/
+└── <videoId>/
+    ├── meta.json
+    ├── source-link.txt
+    ├── transcript.md
+    ├── transcript-raw.md
+    ├── transcript-clean.md
+    └── transcript-fixes.md
 ```
 
-其中：
-- `meta.json`：标题、关键词、视频ID、筛选参数、提取时间
-- `source-link.txt`：最终用于提取的链接
-- `transcript.md`：提取器原始产物
-- `transcript-raw.md`：保留原始转写
-- `transcript-clean.md`：修正版文案
-- `transcript-fixes.md`：修正记录与待确认项
+### 文件说明
 
-## 不要做的事
+- `meta.json`: 标题、关键词、视频ID、筛选参数、提取时间
+- `source-link.txt`: 最终用于提取的链接
+- `transcript.md`: 提取器原始产物
+- `transcript-raw.md`: 原始转写稿
+- `transcript-clean.md`: 修正版文案
+- `transcript-fixes.md`: 修正说明与待确认项
 
+## 工作流程
+
+### 搜索与筛选
+
+1. 打开抖音网页并复用登录态
+2. 搜索自定义关键词
+3. 从搜索结果中读取候选视频列表
+4. 按筛选参数过滤候选项
+5. 选中第 N 个符合条件的视频
+
+### 标题一致性校验
+
+1. 记录目标搜索结果标题
+2. 点开视频进入弹层
+3. 读取当前页面 `modal_id`
+4. 读取当前弹层标题
+5. 执行标题校验脚本
+6. 若标题不一致，停止后续提取并重新锁定目标视频
+
+### 提取与修正
+
+1. 用 `modal_id` 组装稳定视频链接：`https://www.iesdouyin.com/share/video/<videoId>`
+2. 下载视频到临时目录
+3. 使用 FFmpeg 从视频中提取音频（MP3 格式）
+4. 调用硅基流动 SenseVoice API 进行语音识别
+5. 保存 `transcript.md`
+6. 基于标题、标签、上下文和领域常识修正 ASR 文案
+7. 输出 `transcript-raw.md`、`transcript-clean.md`、`transcript-fixes.md`
+
+## 常见问题
+
+### 搜索结果点开后，当前视频变了
+
+这是抖音网页常见问题。必须增加校验：
+
+- **当前弹层标题 == 目标搜索结果标题**
+
+若不一致，不能继续提取。
+
+### 分享按钮不稳定
+
+PC 端分享按钮可能：
+- 只在悬停时出现
+- 位于播放器浮层中，不易点击
+- DOM 结构经常变化
+
+因此本 skill 默认：
+- 优先读取 `modal_id`
+- 用 `modal_id` 组装稳定视频链接
+- 不把“复制链接”当成唯一依赖
+
+### 提取文案失败
+
+- 检查 `API_KEY` 是否已设置
+- 确保 API 密钥有效且有足够额度
+- 确保 FFmpeg 已正确安装
+- 确保输入链接为有效抖音分享链接或可解析的视频链接
+
+### 文案有错别字或语义不通
+
+ASR 常见问题包括：
+- 同音错字
+- 连词错误
+- 重复词
+- 断句错误
+- 领域术语误识别
+
+因此提取后必须执行修正步骤。
+
+## 注意事项
+
+- 本工具仅供学习和研究使用
+- 使用时需遵守相关法律法规
+- 请勿用于任何侵犯版权或违法的目的
 - 不要把分享按钮点击成功作为唯一成功条件
 - 不要直接信任 ASR 文案用于分析
-- 不要在未校验标题一致性前就进入提取
-- 不要把搜索 ref、点击 ref 写死成固定编号
-- 不要改动小红书团队相关 skill 或规范
+- 不要在未完成标题一致性校验前就进入提取
+- 不要把 Playwright 的 element ref 写死成固定编号
