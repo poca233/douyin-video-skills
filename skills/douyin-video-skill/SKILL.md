@@ -1,6 +1,6 @@
 ---
 name: douyin-video-skill
-description: "抖音视频搜索、筛选、选定、链接获取、文案提取与文案修正工作流。用于： (1) 在抖音网页中登录后搜索自定义关键词，(2) 按筛选参数从搜索结果中选择合适视频，(3) 优先从页面 modal_id 或视频页 URL 构造稳定视频链接，必要时再尝试分享按钮复制链接，(4) 调用本地 douyin-video 能力下载视频并提取语音文案，(5) 对 ASR 结果进行基于标题、标签、上下文和领域常识的合理修正，并输出原始稿、修正版、修正说明。适用于抖音二次创作前的素材采集、竞品研究、视频文案提取与清洗场景。"
+description: "抖音视频搜索、筛选、选定、链接获取、文案提取与文案修正工作流。用于： (1) 在抖音网页中登录后搜索自定义关键词，(2) 按筛选参数从搜索结果中选择合适视频，(3) 优先从页面 modal_id 或视频页 URL 构造稳定视频链接，必要时再尝试分享按钮复制链接，(4) 使用本 skill 内置脚本下载视频并提取语音文案，(5) 对 ASR 结果进行基于标题、标签、上下文和领域常识的合理修正，并输出原始稿、修正版、修正说明。适用于抖音二次创作前的素材采集、竞品研究、视频文案提取与清洗场景；可独立发布，不依赖外部 douyin-video skill。"
 ---
 
 # 抖音视频搜索 → 提取 → 修正 工作流
@@ -59,15 +59,24 @@ ASR 常见问题：
 skills/douyin-video-skill/
 ├── SKILL.md
 ├── scripts/
+│   ├── douyin_downloader.py
+│   ├── title_match_check.py
 │   └── transcript_cleanup.py
 └── references/
     └── filter-rules.md
 ```
 
-## 依赖能力
+## 内置能力与依赖
 
-这个 skill **依赖但不替代**：
-- `skills/douyin-video`：分享链接 → 下载视频 → 提取音频 → ASR
+这个 skill 已经**吸收并内置**了原 `douyin-video` 里对新 skill 有用的内容：
+- 分享链接解析
+- 无水印视频下载
+- 音频提取
+- ASR 文案提取
+
+因此，**单独发布时不再依赖外部 `douyin-video` skill**。
+
+仍建议配合：
 - `skills/playwright-cli`：浏览器打开、登录态复用、搜索、点击结果、读取页面参数
 
 ## 推荐执行步骤
@@ -104,7 +113,27 @@ playwright-cli -s=douyinflow click <search-button-ref>
 - `contentTypeHints`: 如 培训 / 科普 / 赛事 / 推荐 / 选购
 - `accountHints`: 优先官方机构 / 教练 / 教育号 / 个人分享
 
-### D. 进入视频后锁定 videoId
+### D. 进入视频后先做“标题一致性校验”
+先记录：
+- 目标搜索结果标题 `targetTitle`
+- 当前页面 `modal_id`
+- 当前弹层标题 `modalTitle`
+
+**硬性校验规则：**
+> 当前弹层标题 == 目标搜索结果标题
+> 否则不能继续提取
+
+执行：
+
+```bash
+python3 skills/douyin-video-skill/scripts/title_match_check.py \
+  --expected "目标搜索结果标题" \
+  --actual "当前弹层标题"
+```
+
+若脚本退出码非 0，必须停止提取并重新锁定目标视频。
+
+### E. 通过校验后锁定 videoId
 优先读取：
 
 ```js
@@ -117,17 +146,17 @@ new URL(location.href).searchParams.get('modal_id')
 https://www.iesdouyin.com/share/video/<videoId>
 ```
 
-### E. 调用 douyin-video 提取文案
+### F. 调用本 skill 内置提取器提取文案
 
 ```bash
-API_KEY="..." python3 skills/douyin-video/scripts/douyin_downloader.py \
+API_KEY="..." python3 skills/douyin-video-skill/scripts/douyin_downloader.py \
   --link "https://www.iesdouyin.com/share/video/<videoId>" \
   --action extract \
   --output ./output
 ```
 
-### F. 落盘原始稿 / 修正版 / 修正说明
-原始 skill 默认只有 `transcript.md`。
+### G. 落盘原始稿 / 修正版 / 修正说明
+原始提取结果默认只有 `transcript.md`。
 
 拿到原始文案后，必须再调用：
 
@@ -167,11 +196,12 @@ python3 skills/douyin-video-skill/scripts/transcript_cleanup.py \
 ### 问题 1：点开搜索结果后，当前视频可能不是你以为的那条
 实测中，搜索结果点中了一条视频，但后续当前弹层的视频 `modal_id` 发生了变化，最终提取到的是另一条内容。
 
-**改进要求：**
+**改进要求（已固化为必须执行）：**
 - 点开结果后，立即记录目标卡片标题
 - 再读取当前页面 `modal_id`
-- 尝试读取当前视频标题
-- 若标题不一致，停止后续提取并重新锁定目标
+- 再读取当前弹层标题
+- 执行标题校验：**当前弹层标题 == 目标搜索结果标题**
+- 若不一致，停止后续提取并重新锁定目标
 
 ### 问题 2：ASR 文案能提出来，但会有明显误识别
 实测文案中出现了：
@@ -189,11 +219,12 @@ python3 skills/douyin-video-skill/scripts/transcript_cleanup.py \
 
 1. 抖音搜索结果页经常触发滑块验证，需要用户手动过一次
 2. 分享按钮在 PC 页播放器浮层里不稳定，点击成本高
-3. `douyin-video` 对 App 分享短链更稳定；对部分网页直链不稳定
+3. App 分享短链更稳定；对部分网页直链不稳定
 4. `playwright-cli` 的 element ref 每次快照都会变，不能硬编码复用旧 ref
 5. Python 依赖需要提前安装：
    - `requests`
    - `ffmpeg-python`
+6. 当前弹层标题与目标搜索结果标题可能不一致，不能跳过校验直接提取
 
 ## 环境要求
 
