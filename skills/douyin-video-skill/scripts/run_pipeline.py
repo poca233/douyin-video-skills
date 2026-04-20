@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DOWNLOADER = ROOT / 'scripts' / 'douyin_downloader.py'
+TITLE_CHECK = ROOT / 'scripts' / 'title_match_check.py'
+CLEANUP = ROOT / 'scripts' / 'transcript_cleanup.py'
+
+
+@dataclass
+class Candidate:
+    ref: str
+    title: str
+    author: str = ''
+    date_text: str = ''
+    duration_sec: int = 0
+    likes_text: str = ''
+
+
+def run(cmd: List[str], check: bool = True, input_text: Optional[str] = None) -> str:
+    res = subprocess.run(cmd, input=input_text, text=True, capture_output=True)
+    if check and res.returncode != 0:
+        raise RuntimeError(f"command failed: {' '.join(cmd)}\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
+    return res.stdout.strip()
+
+
+def pw(session: str, *args: str, check: bool = True) -> str:
+    return run(['playwright-cli', f'-s={session}', *args], check=check)
+
+
+def parse_duration(text: str) -> int:
+    m = re.match(r'^(\d{2}):(\d{2})$', text.strip())
+    if not m:
+        return 0
+    return int(m.group(1)) * 60 + int(m.group(2))
+
+
+def parse_candidates(snapshot: str) -> List[Candidate]:
+    candidates: List[Candidate] = []
+    pattern = re.compile(r'- generic \[ref=(e\d+)\] \[cursor=pointer\]:\n(?P<block>(?: {10,}.*\n){4,20})')
+    for match in pattern.finditer(snapshot):
+        ref = match.group(1)
+        block = match.group('block')
+
+        title = ''
+        author = ''
+        date_text = ''
+        duration_sec = 0
+        likes_text = ''
+
+        for line in block.splitlines():
+            line = line.strip()
+            m_dur = re.search(r': (\d{2}:\d{2})$', line)
+            if m_dur and duration_sec == 0:
+                duration_sec = parse_duration(m_dur.group(1))
+                continue
+
+            m_gen = re.search(r'- generic \[ref=e\d+\]: ?"?(.*?)"?$', line)
+            if not m_gen:
+                continue
+            value = m_gen.group(1).strip()
+            if not value:
+                continue
+            if value.startswith('@'):
+                author = value
+                continue
+            if value.startswith('·'):
+                date_text = value.lstrip('· ').strip()
+                continue
+            if re.fullmatch(r'[\d.]+万?|[\d.]+', value):
+                likes_text = value
+                continue
+            if re.fullmatch(r'\d{2}:\d{2}', value):
+                continue
+            if len(value) >= 8 and not title:
+                title = value
+
+        if title:
+            candidates.append(Candidate(ref=ref, title=title, author=author, date_text=date_text, duration_sec=duration_sec, likes_text=likes_text))
+    return candidates
+
+
+def like_to_num(text: str) -> float:
+    text = text.strip()
+    if not text:
+        return 0
+    if text.endswith('万'):
+        try:
+            return float(text[:-1]) * 10000
+        except Exception:
+            return 0
+    try:
+        return float(text)
+    except Exception:
+        return 0
+
+
+def filter_candidates(candidates: List[Candidate], args) -> List[Candidate]:
+    result = []
+    for c in candidates:
+        title = c.title
+        author = c.author
+        if args.must_include and not all(word in title for word in args.must_include):
+            continue
+        if args.exclude_word and any(word in title or word in author for word in args.exclude_word):
+            continue
+        if args.content_type_hint and not any(word in title for word in args.content_type_hint):
+            continue
+        if args.account_hint and not any(word in author for word in args.account_hint):
+            continue
+        if args.duration_min_sec and c.duration_sec and c.duration_sec < args.duration_min_sec:
+            continue
+        if args.duration_max_sec and c.duration_sec and c.duration_sec > args.duration_max_sec:
+            continue
+        if args.min_likes and like_to_num(c.likes_text) < args.min_likes:
+            continue
+        result.append(c)
+    return result
+
+
+def ensure_open(session: str, headed: bool, persistent: bool):
+    cmd = ['playwright-cli', f'-s={session}', 'open', 'https://www.douyin.com/']
+    if headed:
+        cmd.append('--headed')
+    if persistent:
+        cmd.append('--persistent')
+    run(cmd, check=True)
+
+
+def maybe_wait_for_login(session: str):
+    snap = pw(session, '--raw', 'snapshot')
+    if 'button "登录"' in snap or 'paragraph [ref=e167]: 登录' in snap:
+        print('检测到未登录，请在打开的浏览器中手动登录后按回车继续...', file=sys.stderr)
+        input()
+
+
+def search_keyword(session: str, keyword: str):
+    script = f"async page => {{ await page.getByRole('textbox', {{ name: '搜索你感兴趣的内容' }}).fill({json.dumps(keyword)}); await page.getByRole('button', {{ name: '搜索' }}).click(); }}"
+    pw(session, 'run-code', script)
+
+
+def click_candidate_by_title(session: str, title: str):
+    script = f"async page => {{ await page.getByText({json.dumps(title)}, {{ exact: true }}).click(); }}"
+    pw(session, 'run-code', script)
+
+
+def get_modal_id(session: str) -> str:
+    return pw(session, 'eval', "new URL(location.href).searchParams.get('modal_id')")
+
+
+def get_share_info(video_id: str) -> dict:
+    out = run(['python3', str(DOWNLOADER), '--link', f'https://www.iesdouyin.com/share/video/{video_id}', '--action', 'info'])
+    return json.loads(out)
+
+
+def write_meta(outdir: Path, payload: dict):
+    outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / 'meta.json').write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    if 'share_link' in payload:
+        (outdir / 'source-link.txt').write_text(payload['share_link'] + '\n', encoding='utf-8')
+
+
+def main():
+    parser = argparse.ArgumentParser(description='抖音搜索→筛选→校验→提取→修正 一体化脚本')
+    parser.add_argument('--keyword', required=True)
+    parser.add_argument('--pick-index', type=int, default=1)
+    parser.add_argument('--must-include', action='append', default=[])
+    parser.add_argument('--exclude-word', action='append', default=[])
+    parser.add_argument('--content-type-hint', action='append', default=[])
+    parser.add_argument('--account-hint', action='append', default=[])
+    parser.add_argument('--min-likes', type=float, default=0)
+    parser.add_argument('--duration-min-sec', type=int, default=0)
+    parser.add_argument('--duration-max-sec', type=int, default=0)
+    parser.add_argument('--session', default='douyinflow')
+    parser.add_argument('--headed', action='store_true')
+    parser.add_argument('--persistent', action='store_true')
+    parser.add_argument('--output-dir', default='output')
+    parser.add_argument('--skip-login-check', action='store_true')
+    args = parser.parse_args()
+
+    ensure_open(args.session, args.headed, args.persistent)
+    if not args.skip_login_check:
+        maybe_wait_for_login(args.session)
+
+    search_keyword(args.session, args.keyword)
+    snapshot = pw(args.session, '--raw', 'snapshot')
+    candidates = parse_candidates(snapshot)
+    candidates = filter_candidates(candidates, args)
+    if not candidates:
+        raise SystemExit('未找到符合筛选条件的视频候选项')
+
+    if args.pick_index < 1 or args.pick_index > len(candidates):
+        raise SystemExit(f'pick-index 超出范围，可选数量: {len(candidates)}')
+
+    target = candidates[args.pick_index - 1]
+    click_candidate_by_title(args.session, target.title)
+    video_id = get_modal_id(args.session)
+    if not video_id:
+        raise SystemExit('未能读取 modal_id，无法继续')
+
+    share_info = get_share_info(video_id)
+    actual_title = share_info['title']
+    run(['python3', str(TITLE_CHECK), '--expected', target.title, '--actual', actual_title], check=True)
+
+    share_link = f'https://www.iesdouyin.com/share/video/{video_id}'
+    out = run(['python3', str(DOWNLOADER), '--link', share_link, '--action', 'extract', '--output', args.output_dir], check=True)
+
+    output_path = None
+    try:
+        extracted = json.loads(out)
+        output_path = extracted.get('output_path')
+    except Exception:
+        # fallback: conventional output dir
+        output_path = str(Path(args.output_dir) / video_id)
+
+    outdir = Path(output_path)
+    transcript = outdir / 'transcript.md'
+    run(['python3', str(CLEANUP), '--title', actual_title, '--raw', str(transcript), '--outdir', str(outdir)], check=True)
+
+    meta = {
+        'keyword': args.keyword,
+        'pickIndex': args.pick_index,
+        'selected': {
+            'title': target.title,
+            'author': target.author,
+            'date': target.date_text,
+            'durationSec': target.duration_sec,
+            'likes': target.likes_text,
+        },
+        'validatedTitle': actual_title,
+        'videoId': video_id,
+        'share_link': share_link,
+        'generatedAt': datetime.now().isoformat(timespec='seconds')
+    }
+    write_meta(outdir, meta)
+    print(json.dumps(meta, ensure_ascii=False, indent=2))
+
+
+if __name__ == '__main__':
+    main()

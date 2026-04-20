@@ -60,10 +60,12 @@ skills/douyin-video-skill/
 ├── SKILL.md
 ├── scripts/
 │   ├── douyin_downloader.py
+│   ├── run_pipeline.py
 │   ├── title_match_check.py
 │   └── transcript_cleanup.py
 └── references/
-    └── filter-rules.md
+    ├── filter-rules.md
+    └── publish-copy.md
 ```
 
 ## 内置能力与依赖
@@ -78,6 +80,34 @@ skills/douyin-video-skill/
 
 仍建议配合：
 - `skills/playwright-cli`：浏览器打开、登录态复用、搜索、点击结果、读取页面参数
+
+## 一键执行入口
+
+```bash
+python3 skills/douyin-video-skill/scripts/run_pipeline.py \
+  --keyword "青少年无人机" \
+  --pick-index 1 \
+  --must-include 青少年 \
+  --must-include 无人机 \
+  --content-type-hint 培训 \
+  --content-type-hint 科普 \
+  --account-hint 教育 \
+  --headed \
+  --persistent
+```
+
+这个总控脚本会串起来：
+- 打开抖音并复用登录态
+- 搜索关键词
+- 解析候选项并按参数筛选
+- 点开目标视频
+- 校验“当前弹层标题 == 目标搜索结果标题”
+- 提取文案
+- 修正文案
+- 落盘 meta / source-link / transcript 系列文件
+
+若你要发布到平台，可参考：
+- `references/publish-copy.md`
 
 ## 推荐执行步骤
 
