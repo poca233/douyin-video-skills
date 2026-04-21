@@ -88,6 +88,9 @@ python3 skills/douyin-video-skills/scripts/run_pipeline.py \
   --content-type-hint 培训 \
   --content-type-hint 科普 \
   --account-hint 教育 \
+  --title-match-mode default \
+  --title-min-similarity 0.82 \
+  --max-title-retry 5 \
   --headed \
   --persistent
 ```
@@ -104,6 +107,9 @@ python3 skills/douyin-video-skills/scripts/run_pipeline.py \
 --min-likes            最低点赞量
 --duration-min-sec     最短时长（秒）
 --duration-max-sec     最长时长（秒）
+--title-match-mode     标题匹配模式：strict / default / loose
+--title-min-similarity 标题最小相似度阈值（默认 0.82）
+--max-title-retry      标题校验失败后最多尝试多少个候选（默认 5）
 --headed               浏览器前台运行
 --persistent           使用持久化登录态
 --output-dir           输出目录（默认 output）

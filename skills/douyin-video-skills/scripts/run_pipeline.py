@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import quote
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,43 +48,64 @@ def parse_duration(text: str) -> int:
 
 def parse_candidates(snapshot: str) -> List[Candidate]:
     candidates: List[Candidate] = []
-    pattern = re.compile(r'- generic \[ref=(e\d+)\] \[cursor=pointer\]:\n(?P<block>(?: {10,}.*\n){4,20})')
-    for match in pattern.finditer(snapshot):
-        ref = match.group(1)
-        block = match.group('block')
+    item_pattern = re.compile(r'(^\s*- listitem \[ref=(e\d+)\]:\n(?P<block>(?:\s+.*\n)+?))(?=^\s*- listitem \[ref=e\d+\]:|\Z)', re.M)
+    leaf_generic = re.compile(r'- generic \[ref=e\d+\]: ?"?(.*?)"?$')
+    date_re = re.compile(r'^(\d+分钟前|\d+小时前|\d+天前|\d+周前|\d+月前)$')
 
+    for match in item_pattern.finditer(snapshot + '\n'):
+        ref = match.group(2)
+        block = match.group('block')
         title = ''
         author = ''
         date_text = ''
         duration_sec = 0
         likes_text = ''
+        generic_values = []
 
-        for line in block.splitlines():
-            line = line.strip()
-            m_dur = re.search(r': (\d{2}:\d{2})$', line)
+        for raw_line in block.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            m_dur = re.search(r'(^|\s)(\d{2}:\d{2})$', line)
             if m_dur and duration_sec == 0:
-                duration_sec = parse_duration(m_dur.group(1))
-                continue
+                duration_sec = parse_duration(m_dur.group(2))
 
-            m_gen = re.search(r'- generic \[ref=e\d+\]: ?"?(.*?)"?$', line)
-            if not m_gen:
-                continue
-            value = m_gen.group(1).strip()
-            if not value:
-                continue
-            if value.startswith('@'):
+            m_leaf = leaf_generic.search(line)
+            if m_leaf:
+                value = m_leaf.group(1).strip()
+                if value:
+                    generic_values.append(value)
+
+        for value in generic_values:
+            if value.startswith('@') and not author:
                 author = value
                 continue
-            if value.startswith('·'):
-                date_text = value.lstrip('· ').strip()
+            if date_re.fullmatch(value) and not date_text:
+                date_text = value
+                continue
+            if re.fullmatch(r'[\d.]+万?|[\d.]+', value) and not likes_text:
+                likes_text = value
+                continue
+
+        title_candidates = []
+        for value in generic_values:
+            if value == '合集':
+                continue
+            if value.startswith('@'):
+                continue
+            if date_re.fullmatch(value):
                 continue
             if re.fullmatch(r'[\d.]+万?|[\d.]+', value):
-                likes_text = value
                 continue
             if re.fullmatch(r'\d{2}:\d{2}', value):
                 continue
-            if len(value) >= 8 and not title:
-                title = value
+            if len(value) < 8:
+                continue
+            title_candidates.append(value)
+
+        if title_candidates:
+            title = max(title_candidates, key=len)
 
         if title:
             candidates.append(Candidate(ref=ref, title=title, author=author, date_text=date_text, duration_sec=duration_sec, likes_text=likes_text))
@@ -145,7 +167,8 @@ def maybe_wait_for_login(session: str):
 
 
 def search_keyword(session: str, keyword: str):
-    script = f"async page => {{ await page.getByRole('textbox', {{ name: '搜索你感兴趣的内容' }}).fill({json.dumps(keyword)}); await page.getByRole('button', {{ name: '搜索' }}).click(); }}"
+    url = f'https://www.douyin.com/search/{quote(keyword)}?type=video'
+    script = f"async page => {{ await page.goto({json.dumps(url)}); await page.waitForTimeout(4000); }}"
     pw(session, 'run-code', script)
 
 
@@ -159,17 +182,36 @@ def close_modal(session: str):
 
 
 def get_modal_id(session: str) -> str:
-    return pw(session, 'eval', "new URL(location.href).searchParams.get('modal_id')")
+    out = pw(session, 'eval', "new URL(location.href).searchParams.get('modal_id')")
+    # Clean up: take first line and strip any markdown/code block markers
+    lines = out.strip().splitlines()
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # Remove markdown code block markers
+        line = line.replace('```', '').strip()
+        if line and not line.startswith('//') and not line.startswith('http'):
+            # Looks like a video ID (numeric)
+            if re.fullmatch(r'\d+', line):
+                return line
+    return ''
 
 
-def check_title(expected: str, actual: str) -> dict:
-    out = run(['python3', str(TITLE_CHECK), '--expected', expected, '--actual', actual], check=False)
+def check_title(expected: str, actual: str, mode: str = 'default', min_similarity: float = 0.82) -> dict:
+    out = run([
+        'python3', str(TITLE_CHECK),
+        '--expected', expected,
+        '--actual', actual,
+        '--mode', mode,
+        '--min-similarity', str(min_similarity),
+    ], check=False)
     payload = json.loads(out)
     payload['exit_ok'] = True if payload.get('matched') else False
     return payload
 
 
-def choose_valid_video(session: str, candidates: List[Candidate], start_index: int = 0, max_retry: int = MAX_TITLE_RETRY):
+def choose_valid_video(session: str, candidates: List[Candidate], start_index: int = 0, max_retry: int = MAX_TITLE_RETRY, title_match_mode: str = 'default', title_min_similarity: float = 0.82):
     attempts = []
     upper = min(len(candidates), start_index + max_retry)
     for idx in range(start_index, upper):
@@ -188,7 +230,7 @@ def choose_valid_video(session: str, candidates: List[Candidate], start_index: i
 
         share_info = get_share_info(video_id)
         actual_title = share_info['title']
-        title_check = check_title(candidate.title, actual_title)
+        title_check = check_title(candidate.title, actual_title, mode=title_match_mode, min_similarity=title_min_similarity)
         attempts.append({
             'candidateIndex': idx + 1,
             'candidateTitle': candidate.title,
@@ -196,6 +238,8 @@ def choose_valid_video(session: str, candidates: List[Candidate], start_index: i
             'videoId': video_id,
             'matched': title_check.get('matched', False),
             'reason': title_check.get('reason', 'unknown'),
+            'similarity': title_check.get('similarity'),
+            'mode': title_check.get('mode', title_match_mode),
         })
         if title_check.get('matched'):
             return candidate, video_id, actual_title, attempts
@@ -229,6 +273,9 @@ def main():
     parser.add_argument('--duration-min-sec', type=int, default=0)
     parser.add_argument('--duration-max-sec', type=int, default=0)
     parser.add_argument('--session', default='douyinflow')
+    parser.add_argument('--title-match-mode', choices=['strict', 'default', 'loose'], default='default')
+    parser.add_argument('--title-min-similarity', type=float, default=0.82)
+    parser.add_argument('--max-title-retry', type=int, default=MAX_TITLE_RETRY)
     parser.add_argument('--headed', action='store_true')
     parser.add_argument('--persistent', action='store_true')
     parser.add_argument('--output-dir', default='output')
@@ -241,6 +288,8 @@ def main():
 
     search_keyword(args.session, args.keyword)
     snapshot = pw(args.session, '--raw', 'snapshot')
+    if '验证码中间页' in snapshot or '点击两个形状相同的物体' in snapshot:
+        raise SystemExit('当前会话被抖音验证码拦截，请先在浏览器中完成验证后重试')
     candidates = parse_candidates(snapshot)
     candidates = filter_candidates(candidates, args)
     if not candidates:
@@ -250,7 +299,14 @@ def main():
         raise SystemExit(f'pick-index 超出范围，可选数量: {len(candidates)}')
 
     start_index = args.pick_index - 1
-    target, video_id, actual_title, attempts = choose_valid_video(args.session, candidates, start_index=start_index)
+    target, video_id, actual_title, attempts = choose_valid_video(
+        args.session,
+        candidates,
+        start_index=start_index,
+        max_retry=args.max_title_retry,
+        title_match_mode=args.title_match_mode,
+        title_min_similarity=args.title_min_similarity,
+    )
     if not target or not video_id or not actual_title:
         raise SystemExit('候选视频已尝试，但未找到标题校验通过的视频；请调整筛选条件、pick-index，或放宽标题匹配规则')
 
@@ -282,6 +338,8 @@ def main():
         'validatedTitle': actual_title,
         'videoId': video_id,
         'share_link': share_link,
+        'titleMatchMode': args.title_match_mode,
+        'titleMinSimilarity': args.title_min_similarity,
         'titleValidationAttempts': attempts,
         'generatedAt': datetime.now().isoformat(timespec='seconds')
     }
