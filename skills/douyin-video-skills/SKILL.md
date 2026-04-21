@@ -1,6 +1,6 @@
 ---
-name: douyin-video-skill
-description: "抖音视频搜索、筛选、链接获取、文案提取与修正工具。支持在抖音网页中登录后搜索自定义关键词，按筛选参数从搜索结果中选择合适视频，校验当前弹层标题与目标搜索结果标题一致后，再提取视频语音文案并输出原始稿、修正版、修正说明。适用场景包括抖音二次创作前的素材采集、竞品研究、视频文案提取与清洗。"
+name: douyin-video-skills
+description: "抖音视频搜索、筛选、链接获取、文案提取与修正工具。支持在抖音网页中登录后搜索自定义关键词，按筛选参数从搜索结果中选择合适视频；点开候选视频后先校验当前弹层标题与目标搜索结果标题是否一致，若不一致则自动关闭弹层并继续尝试后续候选，再提取视频语音文案并输出原始稿、修正版、修正说明。适用场景包括抖音二次创作前的素材采集、竞品研究、视频文案提取与清洗。"
 ---
 
 # 抖音视频搜索、文案提取与修正
@@ -39,7 +39,7 @@ pip install requests ffmpeg-python
 playwright-cli --version
 ```
 
-推荐使用持久化登录态：
+推荐使用有头模式且持久化登录态：
 
 ```bash
 playwright-cli -s=douyinflow open https://www.douyin.com/ --headed --persistent
@@ -66,7 +66,7 @@ export API_KEY="your-siliconflow-api-key"
 ### 方法一：使用总控脚本（推荐）
 
 ```bash
-python3 skills/douyin-video-skill/scripts/run_pipeline.py \
+python3 skills/douyin-video-skills/scripts/run_pipeline.py \
   --keyword "青少年无人机" \
   --pick-index 1 \
   --must-include 青少年 \
@@ -97,7 +97,7 @@ python3 skills/douyin-video-skill/scripts/run_pipeline.py \
 
 ### 方法二：分步执行
 
-#### 1. 打开抖音并复用登录态
+#### 1. 打开抖音并复用登录态（首次运行后会在 `~/.playwright/douyinflow` 生成登录态文件，后续可复用）
 
 ```bash
 playwright-cli -s=douyinflow open https://www.douyin.com/ --headed --persistent
@@ -113,18 +113,18 @@ playwright-cli -s=douyinflow click <search-button-ref>
 #### 3. 选定视频后做标题一致性校验
 
 ```bash
-python3 skills/douyin-video-skill/scripts/title_match_check.py \
+python3 skills/douyin-video-skills/scripts/title_match_check.py \
   --expected "目标搜索结果标题" \
   --actual "当前弹层标题"
 ```
 
 > **必须满足：当前弹层标题 == 目标搜索结果标题**  
-> 否则不能继续提取。
+> 若不一致，不继续当前视频提取；应自动关闭弹层并尝试下一个候选。
 
 #### 4. 提取视频文案
 
 ```bash
-python3 skills/douyin-video-skill/scripts/douyin_downloader.py \
+python3 skills/douyin-video-skills/scripts/douyin_downloader.py \
   --link "https://www.iesdouyin.com/share/video/<videoId>" \
   --action extract \
   --output ./output
@@ -133,7 +133,7 @@ python3 skills/douyin-video-skill/scripts/douyin_downloader.py \
 #### 5. 修正文案并生成附加文件
 
 ```bash
-python3 skills/douyin-video-skill/scripts/transcript_cleanup.py \
+python3 skills/douyin-video-skills/scripts/transcript_cleanup.py \
   --title "视频标题" \
   --raw ./output/<videoId>/transcript.md \
   --outdir ./output/<videoId>
@@ -204,7 +204,7 @@ output/
 3. 读取当前页面 `modal_id`
 4. 读取当前弹层标题
 5. 执行标题校验脚本
-6. 若标题不一致，停止后续提取并重新锁定目标视频
+6. 若标题不一致，自动关闭弹层，回到结果列表继续尝试后续候选，直到找到校验通过的视频
 
 ### 提取与修正
 
@@ -224,7 +224,7 @@ output/
 
 - **当前弹层标题 == 目标搜索结果标题**
 
-若不一致，不能继续提取。
+若不一致，不要在错误视频上继续提取。应执行：关闭弹层 → 回到结果列表 → 尝试下一个候选标题 → 重新校验，直到找到正确视频。
 
 ### 分享按钮不稳定
 

@@ -1,4 +1,4 @@
-# douyin-video-skill 发布文案
+# douyin-video-skills 发布文案
 
 ## 标题
 抖音视频搜索、文案提取与修正 Skill
@@ -22,14 +22,15 @@
 2. 搜索自定义关键词
 3. 按筛选参数选择候选视频
 4. 点进视频后校验“当前弹层标题 == 目标搜索结果标题”
-5. 用稳定视频链接提取文案
+5. 如果不一致，关闭弹层并继续尝试后续候选
+6. 用稳定视频链接提取文案
 6. 对 ASR 结果进行语义修正
 7. 输出原始稿、修正版、修正说明、meta 信息
 
 ## 功能卖点
 - 不把“复制链接”当唯一依赖
 - 优先使用 `modal_id` 组装稳定视频链接
-- 内置标题一致性校验，避免点错视频还继续提取
+- 内置标题一致性校验与自动重试，避免点错视频还继续提取
 - 支持自定义搜索词和筛选参数
 - 提取后自动输出 `transcript-raw` / `transcript-clean` / `transcript-fixes`
 - 适合 analyst / planner 的前置素材采集与文案清洗流程
@@ -52,12 +53,12 @@
 
 ## 打包文件检查结果
 当前 `.skill` 包内包含：
-- `douyin-video-skill/SKILL.md`
-- `douyin-video-skill/references/filter-rules.md`
-- `douyin-video-skill/references/publish-copy.md`
-- `douyin-video-skill/scripts/run_pipeline.py`
-- `douyin-video-skill/scripts/title_match_check.py`
-- `douyin-video-skill/scripts/douyin_downloader.py`
-- `douyin-video-skill/scripts/transcript_cleanup.py`
+- `douyin-video-skills/SKILL.md`
+- `douyin-video-skills/references/filter-rules.md`
+- `douyin-video-skills/references/publish-copy.md`
+- `douyin-video-skills/scripts/run_pipeline.py`
+- `douyin-video-skills/scripts/title_match_check.py`
+- `douyin-video-skills/scripts/douyin_downloader.py`
+- `douyin-video-skills/scripts/transcript_cleanup.py`
 
 未发现多余脏文件（如 `.DS_Store`）。

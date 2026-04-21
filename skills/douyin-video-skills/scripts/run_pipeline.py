@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOWNLOADER = ROOT / 'scripts' / 'douyin_downloader.py'
 TITLE_CHECK = ROOT / 'scripts' / 'title_match_check.py'
 CLEANUP = ROOT / 'scripts' / 'transcript_cleanup.py'
+MAX_TITLE_RETRY = 5
 
 
 @dataclass
@@ -153,8 +154,55 @@ def click_candidate_by_title(session: str, title: str):
     pw(session, 'run-code', script)
 
 
+def close_modal(session: str):
+    pw(session, 'key', 'Escape', check=False)
+
+
 def get_modal_id(session: str) -> str:
     return pw(session, 'eval', "new URL(location.href).searchParams.get('modal_id')")
+
+
+def check_title(expected: str, actual: str) -> dict:
+    out = run(['python3', str(TITLE_CHECK), '--expected', expected, '--actual', actual], check=False)
+    payload = json.loads(out)
+    payload['exit_ok'] = True if payload.get('matched') else False
+    return payload
+
+
+def choose_valid_video(session: str, candidates: List[Candidate], start_index: int = 0, max_retry: int = MAX_TITLE_RETRY):
+    attempts = []
+    upper = min(len(candidates), start_index + max_retry)
+    for idx in range(start_index, upper):
+        candidate = candidates[idx]
+        click_candidate_by_title(session, candidate.title)
+        video_id = get_modal_id(session)
+        if not video_id:
+            attempts.append({
+                'candidateIndex': idx + 1,
+                'candidateTitle': candidate.title,
+                'matched': False,
+                'reason': 'missing-modal-id',
+            })
+            close_modal(session)
+            continue
+
+        share_info = get_share_info(video_id)
+        actual_title = share_info['title']
+        title_check = check_title(candidate.title, actual_title)
+        attempts.append({
+            'candidateIndex': idx + 1,
+            'candidateTitle': candidate.title,
+            'actualTitle': actual_title,
+            'videoId': video_id,
+            'matched': title_check.get('matched', False),
+            'reason': title_check.get('reason', 'unknown'),
+        })
+        if title_check.get('matched'):
+            return candidate, video_id, actual_title, attempts
+
+        close_modal(session)
+
+    return None, None, None, attempts
 
 
 def get_share_info(video_id: str) -> dict:
@@ -201,15 +249,10 @@ def main():
     if args.pick_index < 1 or args.pick_index > len(candidates):
         raise SystemExit(f'pick-index 超出范围，可选数量: {len(candidates)}')
 
-    target = candidates[args.pick_index - 1]
-    click_candidate_by_title(args.session, target.title)
-    video_id = get_modal_id(args.session)
-    if not video_id:
-        raise SystemExit('未能读取 modal_id，无法继续')
-
-    share_info = get_share_info(video_id)
-    actual_title = share_info['title']
-    run(['python3', str(TITLE_CHECK), '--expected', target.title, '--actual', actual_title], check=True)
+    start_index = args.pick_index - 1
+    target, video_id, actual_title, attempts = choose_valid_video(args.session, candidates, start_index=start_index)
+    if not target or not video_id or not actual_title:
+        raise SystemExit('候选视频已尝试，但未找到标题校验通过的视频；请调整筛选条件、pick-index，或放宽标题匹配规则')
 
     share_link = f'https://www.iesdouyin.com/share/video/{video_id}'
     out = run(['python3', str(DOWNLOADER), '--link', share_link, '--action', 'extract', '--output', args.output_dir], check=True)
@@ -239,6 +282,7 @@ def main():
         'validatedTitle': actual_title,
         'videoId': video_id,
         'share_link': share_link,
+        'titleValidationAttempts': attempts,
         'generatedAt': datetime.now().isoformat(timespec='seconds')
     }
     write_meta(outdir, meta)

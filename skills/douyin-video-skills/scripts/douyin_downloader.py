@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-抖音无水印视频下载和文案提取工具（douyin-video-skill 内置版）
+抖音无水印视频下载和文案提取工具（douyin-video-skills 内置版）
 
 功能:
 1. 从抖音分享链接获取无水印视频下载链接
@@ -314,7 +314,7 @@ def extract_text(share_link: str, api_key: Optional[str] = None, output_dir: Opt
 
 
 def main():
-    parser = argparse.ArgumentParser(description="抖音无水印视频下载和文案提取工具（douyin-video-skill 内置版）")
+    parser = argparse.ArgumentParser(description="抖音无水印视频下载和文案提取工具（douyin-video-skills 内置版）")
     parser.add_argument("--link", "-l", required=True, help="抖音分享链接或包含链接的文本")
     parser.add_argument("--action", "-a", choices=["info", "download", "extract"], default="info")
     parser.add_argument("--output", "-o", default="./output", help="输出目录")
