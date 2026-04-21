@@ -16,6 +16,7 @@ DOWNLOADER = ROOT / 'scripts' / 'douyin_downloader.py'
 TITLE_CHECK = ROOT / 'scripts' / 'title_match_check.py'
 CLEANUP = ROOT / 'scripts' / 'transcript_cleanup.py'
 MAX_TITLE_RETRY = 5
+DEFAULT_PROFILE_DIR = str(Path.home() / '.playwright' / 'douyinflow')
 
 
 @dataclass
@@ -150,12 +151,14 @@ def filter_candidates(candidates: List[Candidate], args) -> List[Candidate]:
     return result
 
 
-def ensure_open(session: str, headed: bool, persistent: bool):
+def ensure_open(session: str, headed: bool, persistent: bool, profile: Optional[str] = None):
     cmd = ['playwright-cli', f'-s={session}', 'open', 'https://www.douyin.com/']
     if headed:
         cmd.append('--headed')
     if persistent:
         cmd.append('--persistent')
+    if profile:
+        cmd.extend(['--profile', profile])
     run(cmd, check=True)
 
 
@@ -273,6 +276,7 @@ def main():
     parser.add_argument('--duration-min-sec', type=int, default=0)
     parser.add_argument('--duration-max-sec', type=int, default=0)
     parser.add_argument('--session', default='douyinflow')
+    parser.add_argument('--profile', default=DEFAULT_PROFILE_DIR, help='playwright-cli 持久化浏览器 profile 目录')
     parser.add_argument('--title-match-mode', choices=['strict', 'default', 'loose'], default='default')
     parser.add_argument('--title-min-similarity', type=float, default=0.82)
     parser.add_argument('--max-title-retry', type=int, default=MAX_TITLE_RETRY)
@@ -282,7 +286,7 @@ def main():
     parser.add_argument('--skip-login-check', action='store_true')
     args = parser.parse_args()
 
-    ensure_open(args.session, args.headed, args.persistent)
+    ensure_open(args.session, args.headed, args.persistent, args.profile)
     if not args.skip_login_check:
         maybe_wait_for_login(args.session)
 
@@ -338,6 +342,7 @@ def main():
         'validatedTitle': actual_title,
         'videoId': video_id,
         'share_link': share_link,
+        'profile': args.profile,
         'titleMatchMode': args.title_match_mode,
         'titleMinSimilarity': args.title_min_similarity,
         'titleValidationAttempts': attempts,

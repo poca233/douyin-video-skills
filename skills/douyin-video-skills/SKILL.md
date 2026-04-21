@@ -53,10 +53,10 @@ playwright-cli install --skills
 playwright-cli --version
 ```
 
-推荐使用有头模式且持久化登录态：
+推荐使用有头模式、持久化登录态，并显式指定 profile 目录：
 
 ```bash
-playwright-cli -s=douyinflow open https://www.douyin.com/ --headed --persistent
+playwright-cli -s=douyinflow open https://www.douyin.com/ --headed --persistent --profile ~/.playwright/douyinflow
 ```
 
 ### API 密钥配置（仅文案提取需要）
@@ -88,6 +88,7 @@ python3 skills/douyin-video-skills/scripts/run_pipeline.py \
   --content-type-hint 培训 \
   --content-type-hint 科普 \
   --account-hint 教育 \
+  --profile ~/.playwright/douyinflow \
   --title-match-mode default \
   --title-min-similarity 0.82 \
   --max-title-retry 5 \
@@ -107,6 +108,7 @@ python3 skills/douyin-video-skills/scripts/run_pipeline.py \
 --min-likes            最低点赞量
 --duration-min-sec     最短时长（秒）
 --duration-max-sec     最长时长（秒）
+--profile              playwright-cli 持久化浏览器 profile 目录（默认 ~/.playwright/douyinflow）
 --title-match-mode     标题匹配模式：strict / default / loose
 --title-min-similarity 标题最小相似度阈值（默认 0.82）
 --max-title-retry      标题校验失败后最多尝试多少个候选（默认 5）
@@ -120,7 +122,7 @@ python3 skills/douyin-video-skills/scripts/run_pipeline.py \
 #### 1. 打开抖音并复用登录态（首次运行后会在 `~/.playwright/douyinflow` 生成登录态文件，后续可复用）
 
 ```bash
-playwright-cli -s=douyinflow open https://www.douyin.com/ --headed --persistent
+playwright-cli -s=douyinflow open https://www.douyin.com/ --headed --persistent --profile ~/.playwright/douyinflow
 ```
 
 #### 2. 搜索自定义关键词
