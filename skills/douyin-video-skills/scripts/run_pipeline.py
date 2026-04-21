@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import random
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
-from urllib.parse import quote
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,9 @@ TITLE_CHECK = ROOT / 'scripts' / 'title_match_check.py'
 CLEANUP = ROOT / 'scripts' / 'transcript_cleanup.py'
 MAX_TITLE_RETRY = 5
 DEFAULT_PROFILE_DIR = str(Path.home() / '.playwright' / 'douyinflow')
+DEFAULT_HUMAN_DELAY_MIN_MS = 800
+DEFAULT_HUMAN_DELAY_MAX_MS = 2500
+DEFAULT_CAPTCHA_MAX_WAITS = 3
 
 
 @dataclass
@@ -38,6 +42,39 @@ def run(cmd: List[str], check: bool = True, input_text: Optional[str] = None) ->
 
 def pw(session: str, *args: str, check: bool = True) -> str:
     return run(['playwright-cli', f'-s={session}', *args], check=check)
+
+
+def human_sleep(min_ms: int, max_ms: int):
+    low = max(0, min(min_ms, max_ms))
+    high = max(0, max(min_ms, max_ms))
+    time.sleep(random.uniform(low, high) / 1000.0)
+
+
+def get_snapshot(session: str) -> str:
+    return pw(session, '--raw', 'snapshot')
+
+
+def has_captcha(snapshot: str) -> bool:
+    markers = [
+        '验证码中间页',
+        '点击两个形状相同的物体',
+        '请完成下列验证后继续',
+        '按住左边按钮拖动完成上方拼图',
+        'captcha_container',
+    ]
+    return any(marker in snapshot for marker in markers)
+
+
+def wait_for_captcha_resolution(session: str, max_waits: int = DEFAULT_CAPTCHA_MAX_WAITS):
+    for _ in range(max_waits):
+        snap = get_snapshot(session)
+        if not has_captcha(snap):
+            return
+        print('检测到抖音验证码，请在浏览器中完成验证后按回车继续...', file=sys.stderr)
+        input()
+    snap = get_snapshot(session)
+    if has_captcha(snap):
+        raise SystemExit('当前会话被抖音验证码拦截，请先在浏览器中完成验证后重试')
 
 
 def parse_duration(text: str) -> int:
@@ -163,21 +200,51 @@ def ensure_open(session: str, headed: bool, persistent: bool, profile: Optional[
 
 
 def maybe_wait_for_login(session: str):
-    snap = pw(session, '--raw', 'snapshot')
+    snap = get_snapshot(session)
     if 'button "登录"' in snap or 'paragraph [ref=e167]: 登录' in snap:
         print('检测到未登录，请在打开的浏览器中手动登录后按回车继续...', file=sys.stderr)
         input()
 
 
-def search_keyword(session: str, keyword: str):
-    url = f'https://www.douyin.com/search/{quote(keyword)}?type=video'
-    script = f"async page => {{ await page.goto({json.dumps(url)}); await page.waitForTimeout(4000); }}"
-    pw(session, 'run-code', script)
+def search_keyword(session: str, keyword: str, human_delay_min_ms: int, human_delay_max_ms: int, captcha_max_waits: int):
+    pw(session, 'run-code', "async page => { await page.goto('https://www.douyin.com/'); await page.waitForTimeout(2200); }")
+    human_sleep(human_delay_min_ms, human_delay_max_ms)
+    wait_for_captcha_resolution(session, captcha_max_waits)
+
+    fill_and_search = (
+        "async page => {"
+        f" const box = page.getByRole('textbox', {{ name: '搜索你感兴趣的内容' }});"
+        f" await box.click();"
+        f" await page.waitForTimeout({max(250, human_delay_min_ms // 2)});"
+        f" await box.fill({json.dumps(keyword)});"
+        f" await page.waitForTimeout({max(400, human_delay_min_ms)});"
+        f" await page.getByRole('button', {{ name: '搜索' }}).click();"
+        f" await page.waitForTimeout({max(3000, human_delay_max_ms + 1500)});"
+        " }"
+    )
+    pw(session, 'run-code', fill_and_search)
+    human_sleep(human_delay_min_ms, human_delay_max_ms)
+    wait_for_captcha_resolution(session, captcha_max_waits)
+
+    switch_video_tab = (
+        "async page => {"
+        " const tab = page.getByText('视频', { exact: true }).first();"
+        " if (await tab.count()) {"
+        "   await tab.click();"
+        f"   await page.waitForTimeout({max(2200, human_delay_max_ms + 1200)});"
+        " }"
+        " }"
+    )
+    pw(session, 'run-code', switch_video_tab, check=False)
+    human_sleep(human_delay_min_ms, human_delay_max_ms)
+    wait_for_captcha_resolution(session, captcha_max_waits)
 
 
-def click_candidate_by_title(session: str, title: str):
-    script = f"async page => {{ await page.getByText({json.dumps(title)}, {{ exact: true }}).click(); }}"
-    pw(session, 'run-code', script)
+def click_candidate_by_title(session: str, title: str, human_delay_min_ms: int, human_delay_max_ms: int, captcha_max_waits: int):
+    human_sleep(human_delay_min_ms, human_delay_max_ms)
+    script = f"async page => {{ await page.getByText({json.dumps(title)}, {{ exact: true }}).click(); await page.waitForTimeout({max(1800, human_delay_max_ms + 800)}); }}"
+    pw(session, 'run-code', script, check=False)
+    wait_for_captcha_resolution(session, captcha_max_waits)
 
 
 def close_modal(session: str):
@@ -214,12 +281,12 @@ def check_title(expected: str, actual: str, mode: str = 'default', min_similarit
     return payload
 
 
-def choose_valid_video(session: str, candidates: List[Candidate], start_index: int = 0, max_retry: int = MAX_TITLE_RETRY, title_match_mode: str = 'default', title_min_similarity: float = 0.82):
+def choose_valid_video(session: str, candidates: List[Candidate], start_index: int = 0, max_retry: int = MAX_TITLE_RETRY, title_match_mode: str = 'default', title_min_similarity: float = 0.82, human_delay_min_ms: int = DEFAULT_HUMAN_DELAY_MIN_MS, human_delay_max_ms: int = DEFAULT_HUMAN_DELAY_MAX_MS, captcha_max_waits: int = DEFAULT_CAPTCHA_MAX_WAITS):
     attempts = []
     upper = min(len(candidates), start_index + max_retry)
     for idx in range(start_index, upper):
         candidate = candidates[idx]
-        click_candidate_by_title(session, candidate.title)
+        click_candidate_by_title(session, candidate.title, human_delay_min_ms, human_delay_max_ms, captcha_max_waits)
         video_id = get_modal_id(session)
         if not video_id:
             attempts.append({
@@ -280,6 +347,9 @@ def main():
     parser.add_argument('--title-match-mode', choices=['strict', 'default', 'loose'], default='default')
     parser.add_argument('--title-min-similarity', type=float, default=0.82)
     parser.add_argument('--max-title-retry', type=int, default=MAX_TITLE_RETRY)
+    parser.add_argument('--human-delay-min-ms', type=int, default=DEFAULT_HUMAN_DELAY_MIN_MS)
+    parser.add_argument('--human-delay-max-ms', type=int, default=DEFAULT_HUMAN_DELAY_MAX_MS)
+    parser.add_argument('--captcha-max-waits', type=int, default=DEFAULT_CAPTCHA_MAX_WAITS)
     parser.add_argument('--headed', action='store_true')
     parser.add_argument('--persistent', action='store_true')
     parser.add_argument('--output-dir', default='output')
@@ -290,9 +360,9 @@ def main():
     if not args.skip_login_check:
         maybe_wait_for_login(args.session)
 
-    search_keyword(args.session, args.keyword)
-    snapshot = pw(args.session, '--raw', 'snapshot')
-    if '验证码中间页' in snapshot or '点击两个形状相同的物体' in snapshot:
+    search_keyword(args.session, args.keyword, args.human_delay_min_ms, args.human_delay_max_ms, args.captcha_max_waits)
+    snapshot = get_snapshot(args.session)
+    if has_captcha(snapshot):
         raise SystemExit('当前会话被抖音验证码拦截，请先在浏览器中完成验证后重试')
     candidates = parse_candidates(snapshot)
     candidates = filter_candidates(candidates, args)
@@ -310,6 +380,9 @@ def main():
         max_retry=args.max_title_retry,
         title_match_mode=args.title_match_mode,
         title_min_similarity=args.title_min_similarity,
+        human_delay_min_ms=args.human_delay_min_ms,
+        human_delay_max_ms=args.human_delay_max_ms,
+        captcha_max_waits=args.captcha_max_waits,
     )
     if not target or not video_id or not actual_title:
         raise SystemExit('候选视频已尝试，但未找到标题校验通过的视频；请调整筛选条件、pick-index，或放宽标题匹配规则')
@@ -343,6 +416,9 @@ def main():
         'videoId': video_id,
         'share_link': share_link,
         'profile': args.profile,
+        'humanDelayMinMs': args.human_delay_min_ms,
+        'humanDelayMaxMs': args.human_delay_max_ms,
+        'captchaMaxWaits': args.captcha_max_waits,
         'titleMatchMode': args.title_match_mode,
         'titleMinSimilarity': args.title_min_similarity,
         'titleValidationAttempts': attempts,

@@ -9,7 +9,7 @@ description: "抖音视频搜索、筛选、链接获取、文案提取与修正
 
 ## 功能概述
 
-- **搜索视频**: 在抖音网页中使用自定义关键词搜索相关视频
+- **搜索视频**: 从抖音首页输入关键词并进入视频搜索结果，避免直接跳搜索 URL
 - **筛选结果**: 按标题关键词、账号类型、点赞、时长、内容类型等参数筛选候选视频
 - **锁定目标视频**: 点开候选视频后，校验标题是否匹配（支持归一化匹配、包含匹配、相似度匹配）
 - **获取稳定链接**: 优先使用页面 `modal_id` 组装稳定视频链接，必要时再尝试分享按钮
@@ -89,6 +89,9 @@ python3 skills/douyin-video-skills/scripts/run_pipeline.py \
   --content-type-hint 科普 \
   --account-hint 教育 \
   --profile ~/.playwright/douyinflow \
+  --human-delay-min-ms 800 \
+  --human-delay-max-ms 2500 \
+  --captcha-max-waits 3 \
   --title-match-mode default \
   --title-min-similarity 0.82 \
   --max-title-retry 5 \
@@ -109,6 +112,9 @@ python3 skills/douyin-video-skills/scripts/run_pipeline.py \
 --duration-min-sec     最短时长（秒）
 --duration-max-sec     最长时长（秒）
 --profile              playwright-cli 持久化浏览器 profile 目录（默认 ~/.playwright/douyinflow）
+--human-delay-min-ms   人类化操作最短等待时间（毫秒）
+--human-delay-max-ms   人类化操作最长等待时间（毫秒）
+--captcha-max-waits    验证码暂停等待次数（默认 3）
 --title-match-mode     标题匹配模式：strict / default / loose
 --title-min-similarity 标题最小相似度阈值（默认 0.82）
 --max-title-retry      标题校验失败后最多尝试多少个候选（默认 5）
@@ -125,12 +131,9 @@ python3 skills/douyin-video-skills/scripts/run_pipeline.py \
 playwright-cli -s=douyinflow open https://www.douyin.com/ --headed --persistent --profile ~/.playwright/douyinflow
 ```
 
-#### 2. 搜索自定义关键词
+#### 2. 从首页输入搜索词并进入视频结果页
 
-```bash
-playwright-cli -s=douyinflow fill <search-box-ref> "青少年无人机"
-playwright-cli -s=douyinflow click <search-button-ref>
-```
+推荐让总控脚本自动完成，不要直接手写跳转搜索 URL。这样更接近真人操作，更利于减少验证码。
 
 #### 3. 选定视频后做标题一致性校验
 
@@ -215,11 +218,12 @@ output/
 
 ### 搜索与筛选
 
-1. 打开抖音网页并复用登录态
-2. 搜索自定义关键词
-3. 从搜索结果中读取候选视频列表
-4. 按筛选参数过滤候选项
-5. 选中第 N 个符合条件的视频
+1. 打开抖音首页并复用登录态
+2. 以较慢节奏输入搜索词并点击搜索
+3. 切换到视频结果页
+4. 从搜索结果中读取候选视频列表
+5. 按筛选参数过滤候选项
+6. 选中第 N 个符合条件的视频
 
 ### 标题一致性校验
 
@@ -241,6 +245,20 @@ output/
 7. 输出 `transcript-raw.md`、`transcript-clean.md`、`transcript-fixes.md`
 
 ## 常见问题
+
+### 搜索时频繁触发验证码怎么办
+
+建议优先使用以下方式减少验证码：
+
+- 使用固定 profile 目录复用登录态
+- 从首页输入搜索，不要直接跳搜索 URL
+- 增加人类化延迟，不要秒点秒跳
+- 遇到验证码时先手工完成，再继续流程
+
+当前脚本已支持：
+
+- 人类化延迟参数：`--human-delay-min-ms` / `--human-delay-max-ms`
+- 验证码暂停恢复：检测到验证码后暂停，等待人工处理完成再继续
 
 ### 搜索结果点开后，当前视频变了
 
